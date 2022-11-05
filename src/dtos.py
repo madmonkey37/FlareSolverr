@@ -54,6 +54,7 @@ class V1ResponseBase(object):
     startTimestamp: int = None
     endTimestamp: int = None
     version: str = None
+    session: str = None
 
     # V1ResponseSolution
     solution: ChallengeResolutionResultT = None

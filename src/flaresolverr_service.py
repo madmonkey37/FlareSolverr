@@ -1,5 +1,6 @@
 import logging
 import time
+from typing import Optional, cast
 from urllib.parse import unquote
 
 from func_timeout import func_timeout, FunctionTimedOut
@@ -11,6 +12,7 @@ from selenium.webdriver.support.expected_conditions import presence_of_element_l
 
 from dtos import V1RequestBase, V1ResponseBase, ChallengeResolutionT, ChallengeResolutionResultT, IndexResponse, \
     HealthResponse, STATUS_OK, STATUS_ERROR
+from sessions import get_random_session_id, SESSIONS, SessionItem
 import utils
 
 ACCESS_DENIED_SELECTORS = [
@@ -86,11 +88,11 @@ def _controller_v1_handler(req: V1RequestBase) -> V1ResponseBase:
     # execute the command
     res: V1ResponseBase
     if req.cmd == 'sessions.create':
-        raise Exception("Not implemented yet.")
+        res = _cmd_sessions_create(req)
     elif req.cmd == 'sessions.list':
         raise Exception("Not implemented yet.")
     elif req.cmd == 'sessions.destroy':
-        raise Exception("Not implemented yet.")
+        res = _cmd_sessions_destroy(req)
     elif req.cmd == 'request.get':
         res = _cmd_request_get(req)
     elif req.cmd == 'request.post':
@@ -136,19 +138,80 @@ def _cmd_request_post(req: V1RequestBase) -> V1ResponseBase:
     res.solution = challenge_res.result
     return res
 
+def _cmd_sessions_create(req: V1RequestBase) -> V1ResponseBase:
+    session_id: str
+    if req.session:
+        session_id = req.session
+    else:
+        session_id = get_random_session_id()
+    
+    if session_id in SESSIONS:
+        raise Exception(f"Session already exists: ", session_id)
+    
+    proxy_url = _get_proxy_url_from_req(req)   
+    driver = utils.get_webdriver(
+        proxy_url=proxy_url
+    )
+
+    session_item = SessionItem(
+        session_id=session_id,
+        driver=driver
+    )
+    SESSIONS[session_id] = session_item
+
+    res = V1ResponseBase({})
+    res.status = STATUS_OK
+    res.message = f"Session with id '{session_id}' created"
+    res.session = session_id
+    
+    return res
+
+def _cmd_sessions_destroy(req: V1RequestBase) -> V1ResponseBase:
+    session_id = req.session
+    if not session_id:
+        raise Exception("session parameter missing")
+    
+    session_item = SESSIONS.get(session_id)
+    if session_item:
+        del SESSIONS[session_id]
+
+        driver = session_item.driver
+        driver.quit()
+
+    res = V1ResponseBase({})
+    res.status = STATUS_OK
+    res.message = f"Session with id '{session_id}' destroyed"
+    res.session = session_id
+    
+    return res
+
 
 def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
+    session_id: Optional[str] = req.session
+    session_item: Optional[SessionItem] = None
+    if (session_id):
+        session_item = SESSIONS.get(session_id)
+        if not session_item:
+            raise Exception(f"Session with id '{session_id}' does not exist")
+
     timeout = req.maxTimeout / 1000
     driver = None
     try:
-        driver = utils.get_webdriver()
+        if (session_item):    
+            driver = session_item.driver
+        else:
+            proxy_url = _get_proxy_url_from_req(req)
+            driver = utils.get_webdriver(
+                proxy_url=proxy_url
+            )
+
         return func_timeout(timeout, _evil_logic, (req, driver, method))
     except FunctionTimedOut:
         raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
     except Exception as e:
         raise Exception('Error solving the challenge. ' + str(e))
     finally:
-        if driver is not None:
+        if session_item is None and driver is not None:
             driver.quit()
 
 
@@ -229,6 +292,11 @@ def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> Challenge
     res.result = challenge_res
     return res
 
+def _get_proxy_url_from_req(req: V1RequestBase) -> Optional[str]:
+    if req.proxy:
+        return cast(str, req.proxy.get("url"))
+    else:
+        return None
 
 def _post_request(req: V1RequestBase, driver: WebDriver):
     post_form = f'<form id="hackForm" action="{req.url}" method="POST">'
