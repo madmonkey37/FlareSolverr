@@ -205,7 +205,21 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
                 proxy_url=proxy_url
             )
 
-        return func_timeout(timeout, _evil_logic, (req, driver, method))
+        def do_request() -> ChallengeResolutionT:
+            return func_timeout(timeout, _evil_logic, (req, driver, method))
+        
+        res = do_request()
+
+        if req.cookies:
+            for cookie in req.cookies:
+                driver.add_cookie({
+                    "name": cookie["name"],
+                    "value": cookie["value"],
+                })
+            
+            res = do_request()
+        return res
+
     except FunctionTimedOut:
         raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
     except Exception as e:
