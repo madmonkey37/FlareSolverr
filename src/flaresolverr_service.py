@@ -3,6 +3,7 @@ import platform
 import sys
 import time
 from datetime import timedelta
+from typing import Optional, cast
 from urllib.parse import unquote
 
 from func_timeout import FunctionTimedOut, func_timeout
@@ -236,8 +237,12 @@ def _resolve_challenge(req: V1RequestBase, method: str) -> ChallengeResolutionT:
 
             driver = session.driver
         else:
-            driver = utils.get_webdriver()
+            proxy_url = _get_proxy_url_from_req(req)
+            driver = utils.get_webdriver(
+                proxy_url=proxy_url
+            )
             logging.debug('New instance of webdriver has been created to perform the request')
+
         return func_timeout(timeout, _evil_logic, (req, driver, method))
     except FunctionTimedOut:
         raise Exception(f'Error solving the challenge. Timeout after {timeout} seconds.')
@@ -388,6 +393,11 @@ def _evil_logic(req: V1RequestBase, driver: WebDriver, method: str) -> Challenge
     res.result = challenge_res
     return res
 
+def _get_proxy_url_from_req(req: V1RequestBase) -> Optional[str]:
+    if req.proxy:
+        return cast(str, req.proxy.get("url"))
+    else:
+        return None
 
 def _post_request(req: V1RequestBase, driver: WebDriver):
     post_form = f'<form id="hackForm" action="{req.url}" method="POST">'
